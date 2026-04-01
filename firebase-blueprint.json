@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "Game": {
+      "title": "Game",
+      "description": "A game session",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["waiting", "playing", "finished"],
+          "description": "Current status of the game"
+        },
+        "startTime": {
+          "type": "number",
+          "description": "Timestamp when the game started"
+        },
+        "duration": {
+          "type": "number",
+          "description": "Duration of the game in seconds"
+        },
+        "hostId": {
+          "type": "string",
+          "description": "UID of the player who created the game"
+        }
+      },
+      "required": ["status", "hostId"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A player in a game",
+      "type": "object",
+      "properties": {
+        "nickname": {
+          "type": "string",
+          "description": "Player's display name"
+        },
+        "score": {
+          "type": "number",
+          "description": "Current score"
+        },
+        "streak": {
+          "type": "number",
+          "description": "Current correct answer streak"
+        },
+        "lastAnswerTime": {
+          "type": "number",
+          "description": "Timestamp of the last answer"
+        },
+        "isHost": {
+          "type": "boolean",
+          "description": "Whether this player is the host"
+        }
+      },
+      "required": ["nickname", "score", "streak"]
+    }
+  },
+  "firestore": {
+    "/games/{gameId}": {
+      "schema": "Game",
+      "description": "Game sessions"
+    },
+    "/games/{gameId}/players/{playerId}": {
+      "schema": "Player",
+      "description": "Players in a specific game"
+    }
+  }
+}

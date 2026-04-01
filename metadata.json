@@ -1,0 +1,5 @@
+{
+  "name": "Note Master: Real-time Battle",
+  "description": "A real-time musical note matching game with live leaderboards, streaks, and lucky bonuses.",
+  "requestFramePermissions": []
+}
