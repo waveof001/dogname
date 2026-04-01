@@ -59,6 +59,15 @@ interface Player {
 }
 
 const NOTES = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+const NOTE_LABELS: Record<string, string> = {
+  'C': '도',
+  'D': '레',
+  'E': '미',
+  'F': '파',
+  'G': '솔',
+  'A': '라',
+  'B': '시',
+};
 const GAME_DURATION = 60; // 초 단위
 
 // --- Components ---
@@ -119,10 +128,12 @@ export default function App() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [nickname, setNickname] = useState('');
   const [gameIdInput, setGameIdInput] = useState('');
+  const [durationInput, setDurationInput] = useState(60);
   const [currentNote, setCurrentNote] = useState(NOTES[Math.floor(Math.random() * NOTES.length)]);
   const [lastAnswerResult, setLastAnswerResult] = useState<{ correct: boolean; bonus?: string } | null>(null);
   const [timeLeft, setTimeLeft] = useState(GAME_DURATION);
   const [isJoining, setIsJoining] = useState(false);
+  const [isPenalty, setIsPenalty] = useState(false);
 
   // --- Auth ---
   useEffect(() => {
@@ -184,7 +195,7 @@ export default function App() {
     const gameData: Partial<Game> = {
       status: 'waiting',
       hostId: user.uid,
-      duration: GAME_DURATION,
+      duration: durationInput,
     };
 
     await setDoc(doc(db, 'games', newGameId), gameData);
@@ -195,6 +206,7 @@ export default function App() {
       isHost: true,
     });
     setGame({ id: newGameId, ...gameData } as Game);
+    setTimeLeft(durationInput);
   };
 
   const joinGame = async () => {
@@ -230,7 +242,7 @@ export default function App() {
   };
 
   const handleAnswer = async (note: string) => {
-    if (!game || !user || game.status !== 'playing') return;
+    if (!game || !user || game.status !== 'playing' || isPenalty) return;
 
     const isCorrect = note === currentNote;
     const player = players.find(p => p.id === user.uid);
@@ -261,20 +273,35 @@ export default function App() {
           bonusText = '꽝! -500';
         }
       }
+
+      setLastAnswerResult({ correct: true, bonus: bonusText });
+      setTimeout(() => setLastAnswerResult(null), 1000);
+      
+      await updateDoc(doc(db, 'games', game.id, 'players', user.uid), {
+        score: Math.max(0, player.score + points),
+        streak: newStreak,
+        lastAnswerTime: Date.now(),
+      });
+
+      setCurrentNote(NOTES[Math.floor(Math.random() * NOTES.length)]);
     } else {
       points = -200;
+      setIsPenalty(true);
+      setLastAnswerResult({ correct: false });
+      
+      await updateDoc(doc(db, 'games', game.id, 'players', user.uid), {
+        score: Math.max(0, player.score + points),
+        streak: 0,
+        lastAnswerTime: Date.now(),
+      });
+
+      // 3초 후 페널티 해제 및 다음 문제
+      setTimeout(() => {
+        setIsPenalty(false);
+        setLastAnswerResult(null);
+        setCurrentNote(NOTES[Math.floor(Math.random() * NOTES.length)]);
+      }, 3000);
     }
-
-    setLastAnswerResult({ correct: isCorrect, bonus: bonusText });
-    setTimeout(() => setLastAnswerResult(null), 1000);
-
-    await updateDoc(doc(db, 'games', game.id, 'players', user.uid), {
-      score: Math.max(0, player.score + points),
-      streak: newStreak,
-      lastAnswerTime: Date.now(),
-    });
-
-    setCurrentNote(NOTES[Math.floor(Math.random() * NOTES.length)]);
   };
 
   // --- Views ---
@@ -357,14 +384,37 @@ export default function App() {
             </div>
 
             {role === 'teacher' ? (
-              <button 
-                onClick={createGame}
-                disabled={!nickname}
-                className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed py-4 rounded-2xl transition-all font-bold group text-lg"
-              >
-                <Play className="w-6 h-6 group-hover:scale-110 transition-transform" />
-                <span>게임 생성하기</span>
-              </button>
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-widest text-indigo-400 mb-2">제한 시간 (초)</label>
+                  <div className="flex items-center gap-4">
+                    <input 
+                      type="range" 
+                      min="30" 
+                      max="300" 
+                      step="30"
+                      value={durationInput}
+                      onChange={(e) => setDurationInput(parseInt(e.target.value))}
+                      className="flex-1 h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    />
+                    <span className="bg-indigo-500/20 px-4 py-2 rounded-xl font-mono font-bold text-indigo-400 w-20 text-center">
+                      {durationInput}초
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-[10px] text-white/30 mt-2 font-bold px-1">
+                    <span>30초</span>
+                    <span>300초</span>
+                  </div>
+                </div>
+                <button 
+                  onClick={createGame}
+                  disabled={!nickname}
+                  className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed py-4 rounded-2xl transition-all font-bold group text-lg"
+                >
+                  <Play className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                  <span>게임 생성하기</span>
+                </button>
+              </div>
             ) : (
               <div className="space-y-4">
                 <div>
@@ -530,7 +580,25 @@ export default function App() {
                 <Zap className={cn("w-8 h-8", (myPlayer?.streak || 0) > 0 ? "text-yellow-500 fill-yellow-500" : "text-white/20")} />
                 <span className="text-2xl font-black italic">콤보: {myPlayer?.streak}</span>
               </div>
-              <VexNote note={currentNote} />
+              <div className="relative">
+                <VexNote note={currentNote} />
+                {isPenalty && (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="absolute inset-0 bg-red-500/20 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center border-4 border-red-500"
+                  >
+                    <span className="text-red-500 font-black text-4xl mb-2 drop-shadow-lg">틀렸습니다!</span>
+                    <span className="bg-white text-red-600 px-6 py-2 rounded-full font-black text-2xl shadow-xl">
+                      정답: {NOTE_LABELS[currentNote]}
+                    </span>
+                    <div className="mt-4 flex items-center gap-2 text-white font-bold">
+                      <Timer className="w-5 h-5 animate-spin" />
+                      <span>3초 동안 대기...</span>
+                    </div>
+                  </motion.div>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-4 sm:grid-cols-7 gap-3 w-full max-w-2xl">
@@ -538,9 +606,15 @@ export default function App() {
                 <button
                   key={note}
                   onClick={() => handleAnswer(note)}
-                  className="aspect-square bg-white/5 hover:bg-indigo-600 border border-white/10 hover:border-indigo-400 rounded-2xl flex items-center justify-center text-3xl font-black transition-all active:scale-95 shadow-lg"
+                  disabled={isPenalty}
+                  className={cn(
+                    "aspect-square border rounded-2xl flex items-center justify-center text-3xl font-black transition-all active:scale-95 shadow-lg",
+                    isPenalty 
+                      ? "bg-white/5 border-white/5 text-white/20 cursor-not-allowed" 
+                      : "bg-white/5 hover:bg-indigo-600 border-white/10 hover:border-indigo-400 text-white"
+                  )}
                 >
-                  {note}
+                  {NOTE_LABELS[note]}
                 </button>
               ))}
             </div>
