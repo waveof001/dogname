@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   collection, 
   doc, 
@@ -12,10 +12,8 @@ import {
   onSnapshot, 
   query, 
   orderBy, 
-  limit, 
   getDoc,
   serverTimestamp,
-  deleteDoc,
   getDocs
 } from 'firebase/firestore';
 import { signInAnonymously, onAuthStateChanged, User } from 'firebase/auth';
@@ -33,12 +31,15 @@ import {
   CheckCircle2, 
   XCircle,
   Star,
-  Skull,
-  TrendingUp
+  TrendingUp,
+  UserCircle,
+  GraduationCap
 } from 'lucide-react';
+import { Renderer, Stave, StaveNote, Voice, Formatter } from 'vexflow';
 
 // --- Types ---
 type GameStatus = 'waiting' | 'playing' | 'finished';
+type UserRole = 'teacher' | 'student' | null;
 
 interface Game {
   id: string;
@@ -58,60 +59,62 @@ interface Player {
 }
 
 const NOTES = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
-const GAME_DURATION = 60; // seconds
+const GAME_DURATION = 60; // 초 단위
 
 // --- Components ---
 
-const Staff = ({ note }: { note: string }) => {
-  // Simple mapping of notes to positions on a 5-line staff
-  // C4 is below the first line, B4 is on the 3rd line, etc.
-  // We'll use a simple relative offset.
-  const notePositions: Record<string, number> = {
-    'C': 0, // Below staff
-    'D': 1, // Below staff
-    'E': 2, // 1st line
-    'F': 3, // 1st space
-    'G': 4, // 2nd line
-    'A': 5, // 2nd space
-    'B': 6, // 3rd line
-  };
+const VexNote = ({ note }: { note: string }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const pos = notePositions[note];
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    // Clear previous rendering
+    containerRef.current.innerHTML = '';
+
+    const renderer = new Renderer(containerRef.current, Renderer.Backends.SVG);
+    renderer.resize(200, 150);
+    const context = renderer.getContext();
+    
+    // Create a stave of width 150 at position 10, 20 on the canvas.
+    const stave = new Stave(10, 20, 150);
+    stave.addClef('treble').setContext(context).draw();
+
+    // Mapping for VexFlow (C4, D4, etc.)
+    const noteMap: Record<string, string> = {
+      'C': 'c/4',
+      'D': 'd/4',
+      'E': 'e/4',
+      'F': 'f/4',
+      'G': 'g/4',
+      'A': 'a/4',
+      'B': 'b/4',
+    };
+
+    const vexNote = new StaveNote({
+      clef: 'treble',
+      keys: [noteMap[note]],
+      duration: 'q',
+    });
+
+    // Add ledger lines if needed (VexFlow handles this automatically based on keys)
+    const voice = new Voice({ numBeats: 1, beatValue: 4 });
+    voice.addTickables([vexNote]);
+
+    new Formatter().joinVoices([voice]).format([voice], 100);
+    voice.draw(context, stave);
+  }, [note]);
 
   return (
-    <div className="relative w-64 h-48 bg-white/10 rounded-xl border border-white/20 flex items-center justify-center overflow-hidden">
-      {/* Staff Lines */}
-      <div className="absolute inset-0 flex flex-col justify-center space-y-6 px-4">
-        {[1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className="h-[2px] bg-white/30 w-full" />
-        ))}
-      </div>
-
-      {/* Note */}
-      <motion.div
-        key={note}
-        initial={{ scale: 0, opacity: 0, x: 20 }}
-        animate={{ scale: 1, opacity: 1, x: 0 }}
-        className="absolute z-10"
-        style={{
-          bottom: `${20 + pos * 12}px`, // Simple vertical positioning
-        }}
-      >
-        <div className="relative">
-          <div className="w-8 h-6 bg-white rounded-[50%] rotate-[-20deg] shadow-lg shadow-white/20" />
-          <div className="absolute bottom-0 right-0 w-[2px] h-16 bg-white" />
-          {/* Ledger line for C */}
-          {note === 'C' && (
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-12 h-[2px] bg-white/50" />
-          )}
-        </div>
-      </motion.div>
+    <div className="bg-white rounded-2xl p-4 shadow-2xl shadow-white/10 flex items-center justify-center">
+      <div ref={containerRef} />
     </div>
   );
 };
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [role, setRole] = useState<UserRole>(null);
   const [game, setGame] = useState<Game | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [nickname, setNickname] = useState('');
@@ -209,7 +212,7 @@ export default function App() {
         });
         setGame({ id: gId, ...gDoc.data() } as Game);
       } else {
-        alert('Game not found!');
+        alert('게임을 찾을 수 없습니다!');
       }
     } catch (e) {
       console.error(e);
@@ -238,26 +241,24 @@ export default function App() {
     let newStreak = isCorrect ? player.streak + 1 : 0;
 
     if (isCorrect) {
-      // Base points + speed bonus
       const now = Date.now();
       const lastTime = player.lastAnswerTime || (game.startTime?.toMillis() || now);
       const timeTaken = now - lastTime;
       const speedBonus = Math.max(0, 1000 - Math.floor(timeTaken / 10));
       points = 1000 + speedBonus + (newStreak * 100);
 
-      // Luck Factor (10% chance)
       const luck = Math.random();
       if (luck < 0.1) {
         const event = Math.random();
         if (event < 0.4) {
           points *= 2;
-          bonusText = 'DOUBLE! x2';
+          bonusText = '더블! x2';
         } else if (event < 0.8) {
           points += 5000;
-          bonusText = 'JACKPOT! +5000';
+          bonusText = '잭팟! +5000';
         } else {
           points = -500;
-          bonusText = 'UNLUCKY! -500';
+          bonusText = '꽝! -500';
         }
       }
     } else {
@@ -278,7 +279,7 @@ export default function App() {
 
   // --- Views ---
 
-  if (!game) {
+  if (!role) {
     return (
       <div className="min-h-screen bg-[#0f172a] text-white flex flex-col items-center justify-center p-6 font-sans">
         <motion.div 
@@ -291,50 +292,100 @@ export default function App() {
               <Music className="w-12 h-12" />
             </div>
           </div>
-          <h1 className="text-5xl font-black tracking-tighter mb-2 italic">NOTE MASTER</h1>
-          <p className="text-indigo-300 font-medium">Real-time Musical Note Battle</p>
+          <h1 className="text-5xl font-black tracking-tighter mb-2 italic">계이름 퀴즈</h1>
+          <p className="text-indigo-300 font-medium">실시간 음악 계이름 맞추기 배틀</p>
         </motion.div>
 
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-2xl">
+          <button 
+            onClick={() => setRole('teacher')}
+            className="group relative overflow-hidden bg-white/5 border border-white/10 hover:border-indigo-500 p-8 rounded-3xl transition-all flex flex-col items-center gap-4"
+          >
+            <div className="bg-indigo-500/20 p-4 rounded-2xl group-hover:bg-indigo-500 transition-colors">
+              <UserCircle className="w-12 h-12" />
+            </div>
+            <div className="text-center">
+              <h3 className="text-2xl font-bold mb-1">선생님용</h3>
+              <p className="text-white/50 text-sm">게임을 생성하고 학생들을 초대합니다.</p>
+            </div>
+          </button>
+
+          <button 
+            onClick={() => setRole('student')}
+            className="group relative overflow-hidden bg-white/5 border border-white/10 hover:border-green-500 p-8 rounded-3xl transition-all flex flex-col items-center gap-4"
+          >
+            <div className="bg-green-500/20 p-4 rounded-2xl group-hover:bg-green-500 transition-colors">
+              <GraduationCap className="w-12 h-12" />
+            </div>
+            <div className="text-center">
+              <h3 className="text-2xl font-bold mb-1">학생용</h3>
+              <p className="text-white/50 text-sm">참여 코드를 입력하여 게임에 입장합니다.</p>
+            </div>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!game) {
+    return (
+      <div className="min-h-screen bg-[#0f172a] text-white flex flex-col items-center justify-center p-6 font-sans">
+        <button 
+          onClick={() => setRole(null)}
+          className="absolute top-6 left-6 text-white/50 hover:text-white flex items-center gap-2"
+        >
+          <AlertCircle className="w-4 h-4" />
+          뒤로 가기
+        </button>
+
         <div className="w-full max-w-md bg-white/5 border border-white/10 p-8 rounded-3xl backdrop-blur-xl">
+          <h2 className="text-2xl font-bold mb-6 text-center">
+            {role === 'teacher' ? '게임 만들기' : '게임 참여하기'}
+          </h2>
+          
           <div className="space-y-6">
             <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-indigo-400 mb-2">Nickname</label>
+              <label className="block text-xs font-bold uppercase tracking-widest text-indigo-400 mb-2">닉네임</label>
               <input 
                 type="text" 
                 value={nickname}
                 onChange={(e) => setNickname(e.target.value)}
-                placeholder="Enter your name..."
+                placeholder="이름을 입력하세요..."
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:border-indigo-500 transition-colors"
                 maxLength={15}
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {role === 'teacher' ? (
               <button 
                 onClick={createGame}
                 disabled={!nickname}
-                className="flex flex-col items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed py-4 rounded-2xl transition-all font-bold group"
+                className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed py-4 rounded-2xl transition-all font-bold group text-lg"
               >
                 <Play className="w-6 h-6 group-hover:scale-110 transition-transform" />
-                <span>Host Game</span>
+                <span>게임 생성하기</span>
               </button>
-              <div className="flex flex-col gap-2">
-                <input 
-                  type="text" 
-                  value={gameIdInput}
-                  onChange={(e) => setGameIdInput(e.target.value.toUpperCase())}
-                  placeholder="Code..."
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-center font-mono focus:outline-none focus:border-indigo-500"
-                />
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-widest text-green-400 mb-2">참여 코드</label>
+                  <input 
+                    type="text" 
+                    value={gameIdInput}
+                    onChange={(e) => setGameIdInput(e.target.value.toUpperCase())}
+                    placeholder="6자리 코드 입력..."
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-center font-mono text-2xl focus:outline-none focus:border-green-500"
+                  />
+                </div>
                 <button 
                   onClick={joinGame}
                   disabled={!nickname || !gameIdInput || isJoining}
-                  className="bg-white/10 hover:bg-white/20 disabled:opacity-50 py-2 rounded-xl font-bold transition-all"
+                  className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 py-4 rounded-2xl font-bold text-lg transition-all"
                 >
-                  {isJoining ? 'Joining...' : 'Join'}
+                  {isJoining ? '입장 중...' : '게임 입장하기'}
                 </button>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
@@ -345,25 +396,26 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#0f172a] text-white p-6 flex flex-col items-center">
         <div className="w-full max-w-4xl flex flex-col items-center">
-          <div className="bg-indigo-600 px-8 py-4 rounded-3xl shadow-2xl shadow-indigo-500/20 mb-8 text-center">
-            <span className="text-xs font-black uppercase tracking-[0.3em] opacity-70">Game Code</span>
-            <h2 className="text-5xl font-black tracking-tighter font-mono">{game.id}</h2>
+          <div className="bg-indigo-600 px-12 py-6 rounded-3xl shadow-2xl shadow-indigo-500/20 mb-12 text-center relative overflow-hidden group">
+            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
+            <span className="text-xs font-black uppercase tracking-[0.3em] opacity-70">참여 코드</span>
+            <h2 className="text-6xl font-black tracking-tighter font-mono">{game.id}</h2>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full">
             <div className="md:col-span-2 bg-white/5 border border-white/10 rounded-3xl p-8">
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-8">
                 <h3 className="text-2xl font-bold flex items-center gap-2">
                   <Users className="text-indigo-400" />
-                  Players ({players.length})
+                  참여 학생 ({players.length}명)
                 </h3>
-                {game.hostId === user?.uid && (
+                {role === 'teacher' && (
                   <button 
                     onClick={startGame}
                     disabled={players.length < 1}
-                    className="bg-green-600 hover:bg-green-500 disabled:opacity-50 px-8 py-3 rounded-2xl font-black text-lg transition-all shadow-lg shadow-green-500/20"
+                    className="bg-green-600 hover:bg-green-500 disabled:opacity-50 px-10 py-4 rounded-2xl font-black text-xl transition-all shadow-lg shadow-green-500/20"
                   >
-                    START BATTLE
+                    게임 시작!
                   </button>
                 )}
               </div>
@@ -389,9 +441,13 @@ export default function App() {
             </div>
 
             <div className="bg-indigo-900/20 border border-indigo-500/20 rounded-3xl p-8 flex flex-col items-center justify-center text-center">
-              <AlertCircle className="w-12 h-12 text-indigo-400 mb-4" />
-              <h4 className="font-bold text-lg mb-2">Waiting for Host</h4>
-              <p className="text-indigo-300/70 text-sm">The battle will begin once the host clicks start. Get ready!</p>
+              <AlertCircle className="w-12 h-12 text-indigo-400 mb-4 animate-bounce" />
+              <h4 className="font-bold text-xl mb-2">
+                {role === 'teacher' ? '학생들을 기다리는 중' : '선생님을 기다리는 중'}
+              </h4>
+              <p className="text-indigo-300/70">
+                {role === 'teacher' ? '모든 학생이 입장하면 시작 버튼을 눌러주세요.' : '선생님이 게임을 시작할 때까지 잠시만 기다려주세요!'}
+              </p>
             </div>
           </div>
         </div>
@@ -412,25 +468,25 @@ export default function App() {
               <Music className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="font-black italic leading-none">NOTE MASTER</h2>
-              <span className="text-[10px] uppercase tracking-widest text-indigo-400 font-bold">Live Battle</span>
+              <h2 className="font-black italic leading-none">계이름 퀴즈</h2>
+              <span className="text-[10px] uppercase tracking-widest text-indigo-400 font-bold">실시간 배틀 중</span>
             </div>
           </div>
 
           <div className="flex items-center gap-8">
             <div className="flex flex-col items-center">
-              <span className="text-[10px] uppercase font-bold text-white/50">Time Left</span>
+              <span className="text-[10px] uppercase font-bold text-white/50">남은 시간</span>
               <div className={cn(
                 "flex items-center gap-2 font-mono text-2xl font-black",
                 timeLeft < 10 ? "text-red-500 animate-pulse" : "text-white"
               )}>
                 <Timer className="w-5 h-5" />
-                {timeLeft}s
+                {timeLeft}초
               </div>
             </div>
             
             <div className="flex flex-col items-end">
-              <span className="text-[10px] uppercase font-bold text-white/50">Your Score</span>
+              <span className="text-[10px] uppercase font-bold text-white/50">내 점수</span>
               <div className="text-2xl font-black text-indigo-400">
                 {myPlayer?.score.toLocaleString()}
               </div>
@@ -454,24 +510,27 @@ export default function App() {
                     <div className="flex flex-col items-center">
                       <CheckCircle2 className="w-20 h-20 text-green-500 mb-2" />
                       {lastAnswerResult.bonus && (
-                        <span className="bg-yellow-500 text-black px-4 py-1 rounded-full font-black text-xl animate-bounce">
+                        <span className="bg-yellow-500 text-black px-6 py-2 rounded-full font-black text-2xl animate-bounce shadow-xl">
                           {lastAnswerResult.bonus}
                         </span>
                       )}
                     </div>
                   ) : (
-                    <XCircle className="w-20 h-20 text-red-500" />
+                    <div className="flex flex-col items-center">
+                      <XCircle className="w-20 h-20 text-red-500 mb-2" />
+                      <span className="bg-red-500 text-white px-4 py-1 rounded-full font-bold">-200점!</span>
+                    </div>
                   )}
                 </motion.div>
               )}
             </AnimatePresence>
 
             <div className="mb-12 flex flex-col items-center">
-              <div className="mb-4 flex items-center gap-2">
-                <Zap className={cn("w-6 h-6", (myPlayer?.streak || 0) > 0 ? "text-yellow-500 fill-yellow-500" : "text-white/20")} />
-                <span className="text-xl font-black italic">STREAK: {myPlayer?.streak}</span>
+              <div className="mb-6 flex items-center gap-2">
+                <Zap className={cn("w-8 h-8", (myPlayer?.streak || 0) > 0 ? "text-yellow-500 fill-yellow-500" : "text-white/20")} />
+                <span className="text-2xl font-black italic">콤보: {myPlayer?.streak}</span>
               </div>
-              <Staff note={currentNote} />
+              <VexNote note={currentNote} />
             </div>
 
             <div className="grid grid-cols-4 sm:grid-cols-7 gap-3 w-full max-w-2xl">
@@ -479,7 +538,7 @@ export default function App() {
                 <button
                   key={note}
                   onClick={() => handleAnswer(note)}
-                  className="aspect-square bg-white/5 hover:bg-indigo-600 border border-white/10 hover:border-indigo-400 rounded-2xl flex items-center justify-center text-2xl font-black transition-all active:scale-95"
+                  className="aspect-square bg-white/5 hover:bg-indigo-600 border border-white/10 hover:border-indigo-400 rounded-2xl flex items-center justify-center text-3xl font-black transition-all active:scale-95 shadow-lg"
                 >
                   {note}
                 </button>
@@ -491,7 +550,7 @@ export default function App() {
           <div className="w-full lg:w-80 bg-black/20 border-l border-white/10 p-6 flex flex-col">
             <h3 className="text-xs font-black uppercase tracking-[0.2em] text-white/40 mb-6 flex items-center gap-2">
               <Trophy className="w-4 h-4" />
-              Leaderboard
+              실시간 순위
             </h3>
             <div className="space-y-3">
               {topPlayers.map((p, i) => (
@@ -505,7 +564,7 @@ export default function App() {
                   <span className="font-mono font-black text-white/30 w-4">{i + 1}</span>
                   <div className="flex-1 min-w-0">
                     <div className="font-bold truncate">{p.nickname}</div>
-                    <div className="text-xs font-mono text-white/50">{p.score.toLocaleString()} pts</div>
+                    <div className="text-xs font-mono text-white/50">{p.score.toLocaleString()} 점</div>
                   </div>
                   {p.streak > 2 && (
                     <div className="flex items-center gap-1 text-[10px] font-black text-yellow-500">
@@ -533,8 +592,8 @@ export default function App() {
           animate={{ scale: 1, opacity: 1 }}
           className="w-full max-w-2xl text-center"
         >
-          <Trophy className="w-20 h-20 text-yellow-500 mx-auto mb-6 drop-shadow-[0_0_20px_rgba(234,179,8,0.4)]" />
-          <h1 className="text-6xl font-black italic tracking-tighter mb-12">FINAL RANKING</h1>
+          <Trophy className="w-24 h-24 text-yellow-500 mx-auto mb-6 drop-shadow-[0_0_30px_rgba(234,179,8,0.6)]" />
+          <h1 className="text-6xl font-black italic tracking-tighter mb-12">최종 순위 발표</h1>
 
           <div className="flex items-end justify-center gap-4 mb-16 h-64">
             {/* 2nd Place */}
@@ -586,17 +645,18 @@ export default function App() {
 
           <div className="grid grid-cols-2 gap-4">
             <button 
-              onClick={() => setGame(null)}
+              onClick={() => {
+                setGame(null);
+                setRole(null);
+              }}
               className="bg-white/10 hover:bg-white/20 py-4 rounded-2xl font-black transition-all"
             >
-              BACK TO LOBBY
+              처음으로 돌아가기
             </button>
-            {game.hostId === user?.uid && (
+            {role === 'teacher' && (
               <button 
                 onClick={async () => {
-                  // Reset game for another round
                   await updateDoc(doc(db, 'games', game.id), { status: 'waiting' });
-                  // Reset player scores
                   const playersSnapshot = await getDocs(collection(db, 'games', game.id, 'players'));
                   playersSnapshot.forEach(async (pDoc) => {
                     await updateDoc(doc(db, 'games', game.id, 'players', pDoc.id), {
@@ -607,7 +667,7 @@ export default function App() {
                 }}
                 className="bg-indigo-600 hover:bg-indigo-500 py-4 rounded-2xl font-black transition-all"
               >
-                PLAY AGAIN
+                다시 한 판 더!
               </button>
             )}
           </div>

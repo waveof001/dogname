@@ -1,5 +1,5 @@
 {
-  "name": "Note Master: Real-time Battle",
-  "description": "A real-time musical note matching game with live leaderboards, streaks, and lucky bonuses.",
+  "name": "계이름 퀴즈",
+  "description": "실시간으로 즐기는 음악 계이름 맞추기 배틀 게임입니다.",
   "requestFramePermissions": []
 }
